@@ -1,0 +1,109 @@
+- hosts: localhost
+  vars_files:
+  - cred.yml
+  tasks:
+          - name: "launching instance"
+            amazon.aws.ec2:
+                    aws_access_key: "{{ access_key }}"
+                    aws_secret_key: "{{ secret_key }}"                
+                    key_name: 'c19015-1'
+                    instance_type: t2.micro
+                    region: 'ap-south-1'
+                    image: ami-0a9d27a9f4f5c0efc
+                    wait: yes
+                    state: present
+                    assign_public_ip: yes
+                    count: 1
+                    vpc_subnet_id: subnet-ce1108a6
+            register: ec2
+
+          - name: Wait for SSH to come up
+            wait_for:
+                    host: "{{ item.public_dns_name }}"
+                    port: 22
+                    state: started
+            loop: "{{ ec2.instances }}"
+
+      
+          - ec2_instance_info:
+                    aws_access_key: "{{ access_key }}"
+                    aws_secret_key: "{{ secret_key }}"
+            register: x
+
+
+          - name: 'test'
+            debug:
+                    var: x
+
+          - name: 'adding entry in inventory file'
+            blockinfile:
+                    path: ip.txt
+                    block: |
+                            [docker]
+                            {% for i in x['instances'] %}
+                            {% if i['network_interfaces'] %}
+                            {{ i['network_interfaces'][0]['association']['public_ip'] }}
+                            {% endif %}
+                            {% endfor %}
+
+
+          - name: 'adding temperory host for further play'
+            add_host:
+                    hostname: "{{ item.public_ip }}"
+                    groupname: dockerhosts
+            loop: "{{ ec2.instances }}"
+
+
+
+
+- hosts: dockerhosts
+  tasks:
+          - name: "configuring yum for docker"
+            yum_repository:
+                    name: "docker_file"
+                    baseurl: 'https://download.docker.com/linux/centos/7/x86_64/stable/'
+                    gpgcheck: no
+                    description: "docker repository"
+
+                    
+          - name: 'docker install '
+            command: "yum install docker-ce -y --nobest --allowerasing"
+
+
+          - service:
+                  name: docker
+                  state: started
+
+          - name: 'python install'
+            package:
+                  name: python36
+                  state: present
+
+          - name: 'pip install requests'
+            pip:
+                  name: 'requests'
+
+          - name:
+            pip:
+                  name: docker
+
+          - name: 'pull httpd'
+            docker_image:
+                  name: 'yash202000/webserver-php'
+                  state: present
+
+
+          - name: 'copying content'
+            copy:
+                  dest: 'index.html'
+                  content: '<html><body><h1>This is webpages folder in os</h1></body></html>'
+
+
+          - command: 'docker run -dit -p 80:80 --name os3 yash202000/webserver-php'
+
+          - name: 'copy content into container'
+            shell: 'docker cp index.html  os3:/var/www/html/index.html '
+
+
+
+
